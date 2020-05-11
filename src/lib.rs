@@ -1,20 +1,345 @@
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::error::Error;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{thread, time};
+use url::form_urlencoded;
 
-pub fn http_get(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
-     reqwest::blocking::get(url)
+const CLIENT_ID: &'static str = "client_id";
+const SCOPES: &'static str = "scope";
+const CODE: &'static str = "auth_code";
+const REDIRECT_URI: &'static str = "redirect_uri";
+const GRANT_TYPE: &'static str = "grant_type";
+const DEVICE_CODE_GRANT: &'static str = "device_code";
+const DEVICE_CODE: &'static str = "device_code";
+const RESPONSE_MODE: &'static str = "response_mode";
+const RESPONSE_TYPE: &'static str = "response_type";
+const CODE_CHALLENGE: &'static str = "code_challenge";
+const CODE_CHALLENGE_METHOD: &'static str = "code_challenge_method";
+const STATE: &'static str = "state";
+const PROMPT: &'static str = "prompt";
+const LOGIN_HINT: &'static str = "login_hint";
+const CLAIMS: &'static str = "claims";
+const NONCE: &'static str = "claims";
+const TENANT_DISCOVERY_ENDPOINT: &'static str = "/v2.0/.well-known/openid-configuration";
+const COMMON_AUTHORITY: &'static str = "https://login.microsoftonline.com/common";
+
+pub struct PublicClient<'a> {
+    pub client_id: &'a str,
+    authority: Authority,
 }
 
-pub fn http_post(url: &str, body: String) -> Result<reqwest::blocking::Response, reqwest::Error> {
+pub struct ConfidentialClient<'a> {
+    pub client_id: &'a str,
+    authority: Authority,
+}
+
+pub trait ClientApplication {
+    fn client_id(&self) -> &str;
+
+    fn authority(&self) -> &Authority;
+
+    fn acquire_token_by_auth_code(
+        &self,
+        scopes: &Vec<&str>,
+        auth_code: &str,
+        redirect_uri: &str,
+    ) -> TokenResponse {
+        let scopes = &*scopes.join(" ");
+
+        let mut parameters = HashMap::new();
+
+        parameters.insert(CLIENT_ID, self.client_id());
+        parameters.insert(SCOPES, scopes);
+        parameters.insert(CODE, auth_code);
+        parameters.insert(REDIRECT_URI, redirect_uri);
+        parameters.insert(GRANT_TYPE, "authorization_code");
+
+        let token_request_body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(parameters)
+            .finish();
+
+        let response: TokenResponse =
+            http_post(&self.authority().token_endpoint, token_request_body)
+                .unwrap()
+                .json()
+                .unwrap();
+        response
+    }
+}
+
+pub struct AuthorizationUrl<'a> {
+    pub client_id: &'a str,
+    pub redirect_uri: &'a str,
+    pub scopes: &'a Vec<&'a str>,
+    pub authority: Option<&'a str>,
+    pub response_mode: Option<&'a str>,
+    pub code_challenge: Option<&'a str>,
+    pub code_challenge_method: Option<&'a str>,
+    pub state: Option<&'a str>,
+    pub prompt: Option<&'a str>,
+    pub login_hint: Option<&'a str>,
+    pub claims: Option<&'a str>,
+    pub nonce: Option<&'a str>,
+}
+
+impl<'a> AuthorizationUrl<'a> {
+    pub fn new(
+        client_id: &'a str,
+        redirect_uri: &'a str,
+        scopes: &'a Vec<&str>,
+    ) -> AuthorizationUrl<'a> {
+        AuthorizationUrl {
+            client_id,
+            redirect_uri,
+            scopes,
+            authority: None,
+            response_mode: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            state: None,
+            prompt: None,
+            login_hint: None,
+            claims: None,
+            nonce: None,
+        }
+    }
+
+    pub fn authority(&'a mut self, authority: &'a str) -> &'a AuthorizationUrl {
+        self.authority = Some(authority);
+        self
+    }
+
+    pub fn response_mode(&'a mut self, response_mode: &'a str) -> &'a AuthorizationUrl {
+        self.response_mode = Some(response_mode);
+        self
+    }
+
+    pub fn code_challenge(&'a mut self, code_challenge: &'a str) -> &'a AuthorizationUrl {
+        self.response_mode = Some(code_challenge);
+        self
+    }
+
+    pub fn code_challenge_method(
+        &'a mut self,
+        code_challenge_method: &'a str,
+    ) -> &'a AuthorizationUrl {
+        self.response_mode = Some(code_challenge_method);
+        self
+    }
+
+    pub fn state(&'a mut self, state: &'a str) -> &'a AuthorizationUrl {
+        self.response_mode = Some(state);
+        self
+    }
+
+    pub fn prompt(&'a mut self, prompt: &'a str) -> &'a AuthorizationUrl {
+        self.prompt = Some(prompt);
+        self
+    }
+
+    pub fn login_hint(&'a mut self, login_hint: &'a str) -> &'a AuthorizationUrl {
+        self.login_hint = Some(login_hint);
+        self
+    }
+
+    pub fn claims(&'a mut self, claims: &'a str) -> &'a AuthorizationUrl {
+        self.claims = Some(claims);
+        self
+    }
+
+    pub fn nonce(&'a mut self, nonce: &'a str) -> &'a AuthorizationUrl {
+        self.nonce = Some(nonce);
+        self
+    }
+
+    pub fn build(&self) -> String {
+        let mut params: HashMap<&str, &str> = HashMap::new();
+        params.insert(CLIENT_ID, self.client_id);
+        params.insert(REDIRECT_URI, self.redirect_uri);
+        params.insert(RESPONSE_TYPE, "code");
+
+        let scopes = &self.scopes.join(" ");
+        params.insert(SCOPES, scopes);
+
+        let response_mode;
+        if let Some(x) = self.response_mode {
+            response_mode = x;
+        } else {
+            response_mode = "query";
+        }
+        params.insert(RESPONSE_MODE, response_mode);
+
+        if let Some(x) = self.code_challenge {
+            params.insert(CODE_CHALLENGE, x);
+        }
+
+        if let Some(x) = self.code_challenge_method {
+            params.insert(CODE_CHALLENGE_METHOD, x);
+        }
+
+        if let Some(x) = self.state {
+            params.insert(STATE, x);
+        }
+
+        if let Some(x) = self.prompt {
+            params.insert(PROMPT, x);
+        }
+
+        if let Some(x) = self.login_hint {
+            params.insert(LOGIN_HINT, x);
+        }
+
+        if let Some(x) = self.claims {
+            params.insert(CLAIMS, x);
+        }
+
+        if let Some(x) = self.nonce {
+            params.insert(NONCE, x);
+        }
+
+        let encoded_query = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+
+        let authority = if let Some(x) = self.authority {
+            x
+        } else {
+            COMMON_AUTHORITY
+        };
+
+        let auth_url = format!("{}/oauth2/v2.0/authorize?{}", authority, encoded_query);
+        auth_url
+    }
+}
+
+pub enum ResponseMode {}
+
+#[derive(Clone, Deserialize)]
+pub struct TokenResponse {
+    pub expires_in: Option<u64>,
+    pub ext_expires_in: Option<u64>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub id_token: Option<String>,
+
+    // Error
+    pub error: Option<String>,
+    pub error_description: Option<String>,
+    pub error_codes: Option<Vec<usize>>,
+    pub timestamp: Option<String>,
+    pub trace_id: Option<String>,
+    pub correlation_id: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct DeviceCodeResponse {
+    pub user_code: String,
+    pub device_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+    pub message: String,
+}
+
+impl<'a> PublicClient<'a> {
+    pub fn new(client_id: &'a str, authority: &'a str) -> PublicClient<'a> {
+        let authority = Authority::new(authority);
+        return PublicClient {
+            client_id,
+            authority,
+        };
+    }
+
+    pub fn acquire_token_by_device_flow(
+        &self,
+        scopes: Vec<&str>,
+        callback: fn(device_code_response: DeviceCodeResponse),
+    ) -> Result<TokenResponse, Box<dyn Error>> {
+        let scopes: &str = &*scopes.join(" ");
+
+        let mut parameters = HashMap::new();
+        parameters.insert(CLIENT_ID, self.client_id());
+        parameters.insert(SCOPES, scopes);
+
+        let request_body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(parameters)
+            .finish();
+
+        let device_code_response: DeviceCodeResponse =
+            http_post(&self.authority.device_code_endpoint, request_body)
+                .unwrap()
+                .json()
+                .unwrap();
+        callback(device_code_response.clone());
+
+        let mut token_request_parameters: HashMap<&'static str, &str> = HashMap::new();
+        token_request_parameters.insert(CLIENT_ID, self.client_id());
+        token_request_parameters.insert(SCOPES, scopes);
+        token_request_parameters.insert(GRANT_TYPE, DEVICE_CODE_GRANT);
+        token_request_parameters.insert(DEVICE_CODE, &device_code_response.device_code);
+
+        let device_code_body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(token_request_parameters)
+            .finish();
+
+        let device_code_expiration = device_code_response.expires_in
+            + SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+        loop {
+            if device_code_expiration
+                < SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            {
+                return Err("Device code expired")?;
+            }
+
+            // TODO add cancellation
+
+            let response =
+                http_post(&self.authority.token_endpoint, device_code_body.clone()).unwrap();
+
+            let json_response: TokenResponse = response.json().unwrap();
+
+            match json_response.error.as_ref().map(String::as_str) {
+                Some("authorization_pending") => println!("{}", json_response.error.unwrap()),
+                None => return Ok(json_response),
+                _ => return Err(json_response.error_description.unwrap())?,
+            }
+
+            thread::sleep(time::Duration::from_secs(device_code_response.interval))
+        }
+    }
+}
+
+impl ClientApplication for PublicClient<'_> {
+    fn client_id(&self) -> &str {
+        return &self.client_id;
+    }
+
+    fn authority(&self) -> &Authority {
+        return &self.authority;
+    }
+}
+
+fn http_get(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    reqwest::blocking::get(url)
+}
+
+fn http_post(url: &str, body: String) -> Result<reqwest::blocking::Response, reqwest::Error> {
     let client = reqwest::blocking::Client::new();
     client.post(url).body(body).send()
 }
 
-const TENANT_DISCOVERY_ENDPOINT: &'static str = "/v2.0/.well-known/openid-configuration";
-
 #[derive(Deserialize)]
 struct TenantDiscoveryResponse {
     authorization_endpoint: String,
-    token_endpoint: String
+    token_endpoint: String,
 }
 
 pub struct Authority {
@@ -32,13 +357,14 @@ impl Authority {
             authority_url: authority_url.to_string(),
             authorization_endpoint: tenant_discovery_response.authorization_endpoint,
             token_endpoint: tenant_discovery_response.token_endpoint.clone(),
-            device_code_endpoint: tenant_discovery_response.token_endpoint.replace("token", "devicecode"),
+            device_code_endpoint: tenant_discovery_response
+                .token_endpoint
+                .replace("token", "devicecode"),
         }
     }
 
     fn tenant_discovery(authority_url: &str) -> TenantDiscoveryResponse {
-
-        let response = http_get(&format!("{}{}" , authority_url, TENANT_DISCOVERY_ENDPOINT));
+        let response = http_get(&format!("{}{}", authority_url, TENANT_DISCOVERY_ENDPOINT));
         let response: TenantDiscoveryResponse = response.unwrap().json().unwrap();
         response
     }
