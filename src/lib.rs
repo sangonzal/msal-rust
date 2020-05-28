@@ -11,7 +11,10 @@ const CODE: &'static str = "code";
 const REDIRECT_URI: &'static str = "redirect_uri";
 const GRANT_TYPE: &'static str = "grant_type";
 const DEVICE_CODE_GRANT: &'static str = "device_code";
+const REFRESH_TOKEN_GRANT: &'static str = "refresh_token";
+const AUTHORIZATION_CODE_GRANT: &'static str = "authorization_code";
 const DEVICE_CODE: &'static str = "device_code";
+const REFRESH_TOKEN: &'static str = "refresh_token";
 const RESPONSE_MODE: &'static str = "response_mode";
 const RESPONSE_TYPE: &'static str = "response_type";
 const CODE_CHALLENGE: &'static str = "code_challenge";
@@ -39,6 +42,32 @@ pub trait ClientApplication {
 
     fn authority(&self) -> &Authority;
 
+    fn acquire_token_by_refresh_token(
+        &self,
+        scopes: &Vec<&str>,
+        refresh_token: &str,
+    ) -> TokenResponse {
+        let scopes = &*scopes.join(" ");
+
+        let mut parameters = HashMap::new();
+
+        parameters.insert(CLIENT_ID, self.client_id());
+        parameters.insert(SCOPES, scopes);
+        parameters.insert(REFRESH_TOKEN, refresh_token);
+        parameters.insert(GRANT_TYPE, REFRESH_TOKEN_GRANT);
+
+        let token_request_body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(parameters)
+            .finish();
+
+        let response: TokenResponse =
+            http_post(&self.authority().token_endpoint, token_request_body)
+                .unwrap()
+                .json()
+                .unwrap();
+        response
+    }
+
     fn acquire_token_by_auth_code(
         &self,
         scopes: &Vec<&str>,
@@ -53,7 +82,7 @@ pub trait ClientApplication {
         parameters.insert(SCOPES, scopes);
         parameters.insert(CODE, auth_code);
         parameters.insert(REDIRECT_URI, redirect_uri);
-        parameters.insert(GRANT_TYPE, "authorization_code");
+        parameters.insert(GRANT_TYPE, AUTHORIZATION_CODE_GRANT);
 
         let token_request_body = form_urlencoded::Serializer::new(String::new())
             .extend_pairs(parameters)
@@ -157,7 +186,7 @@ impl<'a> AuthorizationUrl<'a> {
         let mut params: HashMap<&str, &str> = HashMap::new();
         params.insert(CLIENT_ID, self.client_id);
         params.insert(REDIRECT_URI, self.redirect_uri);
-        params.insert(RESPONSE_TYPE, "code");
+        params.insert(RESPONSE_TYPE, CODE);
 
         let scopes = &self.scopes.join(" ");
         params.insert(SCOPES, scopes);
@@ -253,7 +282,7 @@ impl<'a> PublicClient<'a> {
 
     pub fn acquire_token_by_device_flow(
         &self,
-        scopes: Vec<&str>,
+        scopes: &Vec<&str>,
         callback: fn(device_code_response: DeviceCodeResponse),
     ) -> Result<TokenResponse, Box<dyn Error>> {
         let scopes: &str = &*scopes.join(" ");
