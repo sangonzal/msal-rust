@@ -7,7 +7,7 @@ use url::form_urlencoded;
 
 const CLIENT_ID: &'static str = "client_id";
 const SCOPES: &'static str = "scope";
-const CODE: &'static str = "auth_code";
+const CODE: &'static str = "code";
 const REDIRECT_URI: &'static str = "redirect_uri";
 const GRANT_TYPE: &'static str = "grant_type";
 const DEVICE_CODE_GRANT: &'static str = "device_code";
@@ -105,17 +105,17 @@ impl<'a> AuthorizationUrl<'a> {
         }
     }
 
-    pub fn authority(&'a mut self, authority: &'a str) -> &'a AuthorizationUrl {
+    pub fn authority(&'a mut self, authority: &'a str) -> &'a mut AuthorizationUrl {
         self.authority = Some(authority);
         self
     }
 
-    pub fn response_mode(&'a mut self, response_mode: &'a str) -> &'a AuthorizationUrl {
+    pub fn response_mode(&'a mut self, response_mode: &'a str) -> &'a mut AuthorizationUrl {
         self.response_mode = Some(response_mode);
         self
     }
 
-    pub fn code_challenge(&'a mut self, code_challenge: &'a str) -> &'a AuthorizationUrl {
+    pub fn code_challenge(&'a mut self, code_challenge: &'a str) -> &'a mut AuthorizationUrl {
         self.response_mode = Some(code_challenge);
         self
     }
@@ -123,32 +123,32 @@ impl<'a> AuthorizationUrl<'a> {
     pub fn code_challenge_method(
         &'a mut self,
         code_challenge_method: &'a str,
-    ) -> &'a AuthorizationUrl {
+    ) -> &'a mut AuthorizationUrl {
         self.response_mode = Some(code_challenge_method);
         self
     }
 
-    pub fn state(&'a mut self, state: &'a str) -> &'a AuthorizationUrl {
+    pub fn state(&'a mut self, state: &'a str) -> &'a mut AuthorizationUrl {
         self.response_mode = Some(state);
         self
     }
 
-    pub fn prompt(&'a mut self, prompt: &'a str) -> &'a AuthorizationUrl {
+    pub fn prompt(&'a mut self, prompt: &'a str) -> &'a mut AuthorizationUrl {
         self.prompt = Some(prompt);
         self
     }
 
-    pub fn login_hint(&'a mut self, login_hint: &'a str) -> &'a AuthorizationUrl {
+    pub fn login_hint(&'a mut self, login_hint: &'a str) -> &'a mut AuthorizationUrl {
         self.login_hint = Some(login_hint);
         self
     }
 
-    pub fn claims(&'a mut self, claims: &'a str) -> &'a AuthorizationUrl {
+    pub fn claims(&'a mut self, claims: &'a str) -> &'a mut AuthorizationUrl {
         self.claims = Some(claims);
         self
     }
 
-    pub fn nonce(&'a mut self, nonce: &'a str) -> &'a AuthorizationUrl {
+    pub fn nonce(&'a mut self, nonce: &'a str) -> &'a mut AuthorizationUrl {
         self.nonce = Some(nonce);
         self
     }
