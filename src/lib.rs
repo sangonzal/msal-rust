@@ -1,9 +1,11 @@
-use serde::Deserialize;
+use jsonwebtoken::{EncodingKey, Header};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{thread, time};
 use url::form_urlencoded;
+use uuid::Uuid;
 
 const CLIENT_ID: &'static str = "client_id";
 const SCOPES: &'static str = "scope";
@@ -13,8 +15,15 @@ const GRANT_TYPE: &'static str = "grant_type";
 const DEVICE_CODE_GRANT: &'static str = "device_code";
 const REFRESH_TOKEN_GRANT: &'static str = "refresh_token";
 const AUTHORIZATION_CODE_GRANT: &'static str = "authorization_code";
+const CLIENT_CREDENTIALS_GRANT: &'static str = "client_credentials";
+const JWT_BEARER_GRANT_TYPE: &'static str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+const CLIENT_ASSERTION_GRANT_TYPE: &'static str =
+    "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+const ASSERTION_TYPE: &'static str = "assertion_type";
+const ASSERTION: &'static str = "assertion";
 const DEVICE_CODE: &'static str = "device_code";
 const REFRESH_TOKEN: &'static str = "refresh_token";
+const CLIENT_SECRET: &'static str = "client_secret";
 const RESPONSE_MODE: &'static str = "response_mode";
 const RESPONSE_TYPE: &'static str = "response_type";
 const CODE_CHALLENGE: &'static str = "code_challenge";
@@ -35,6 +44,169 @@ pub struct PublicClient<'a> {
 pub struct ConfidentialClient<'a> {
     pub client_id: &'a str,
     authority: Authority,
+    credential: ClientCredential<'a>,
+}
+
+pub struct ClientCredential<'a> {
+    assertion: Option<Assertion<'a>>,
+    secret: Option<&'a str>,
+    encoding_key: Option<EncodingKey>,
+}
+
+struct Assertion<'a> {
+    assertion: &'a str,
+    expiration_time: Option<u64>,
+}
+
+impl<'a> ClientCredential<'a> {
+    pub fn from_secret(secret: &'a str) -> Self {
+        return ClientCredential {
+            assertion: None,
+            secret: Some(secret),
+            encoding_key: None,
+        };
+    }
+    pub fn from_certificate(key: &[u8]) -> Self {
+        let encoding_key = jsonwebtoken::EncodingKey::from_rsa_pem(key).unwrap();
+        return ClientCredential {
+            assertion: None,
+            secret: None,
+            encoding_key: Some(encoding_key),
+        };
+    }
+
+    pub fn from_assertion(assertion: &'a str) -> Self {
+        let assertion = Assertion {
+            assertion,
+            expiration_time: None,
+        };
+
+        return ClientCredential {
+            assertion: Some(assertion),
+            secret: None,
+            encoding_key: None,
+        };
+    }
+}
+
+impl<'a> ConfidentialClient<'a> {
+    pub fn new(client_id: &'a str, authority: &'a str, credential: ClientCredential<'a>) -> Self {
+        let authority = Authority::new(authority);
+
+        let updated_credential = if let Some(encoding_key) = credential.encoding_key {
+            let assertion = Self::create_assertion_from_certificate(
+                &encoding_key,
+                &authority.token_endpoint,
+                client_id,
+            );
+            ClientCredential {
+                assertion: Some(assertion),
+                secret: None,
+                encoding_key: Some(encoding_key.clone()),
+            }
+        } else {
+            credential
+        };
+
+        return ConfidentialClient {
+            client_id,
+            authority,
+            credential: updated_credential,
+        };
+    }
+
+    pub fn acquire_token_for_client(&mut self, scopes: &Vec<&str>) -> TokenResponse {
+        let scopes = &*scopes.join(" ");
+
+        let mut parameters = HashMap::new();
+
+        parameters.insert(CLIENT_ID, self.client_id());
+        parameters.insert(SCOPES, scopes);
+        parameters.insert(GRANT_TYPE, CLIENT_CREDENTIALS_GRANT);
+
+        let token_request_body = form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(parameters)
+            .finish();
+
+        let response: TokenResponse =
+            http_post(&self.authority().token_endpoint, token_request_body)
+                .unwrap()
+                .json()
+                .unwrap();
+        response
+    }
+
+    fn apply_client_authentication(
+        &mut self,
+        mut parameters: HashMap<&'a str, &'a str>,
+    ) -> HashMap<&'a str, &'a str> {
+        if let Some(client_secret) = self.credential.secret {
+            parameters.insert(CLIENT_SECRET, client_secret);
+        } else {
+            let mut assertion = self
+                .credential
+                .assertion
+                .expect("If there is no secret, then there must be an assertion");
+            // if there is an expiration time, we created the assertion, and therefore have and encoding key for it
+            if let Some(expiration_time) = assertion.expiration_time {
+                if expiration_time
+                    < SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                {
+                    assertion = Self::create_assertion_from_certificate(
+                        &self
+                            .credential
+                            .encoding_key
+                            .expect("if expiration date is set, then encoding key is set"),
+                        &self.authority.token_endpoint,
+                        &self.client_id,
+                    );
+                    self.credential.assertion = Some(assertion);
+                }
+            }
+            parameters.insert(ASSERTION_TYPE, CLIENT_ASSERTION_GRANT_TYPE);
+            parameters.insert(ASSERTION, &assertion.assertion);
+        }
+        return parameters;
+    }
+
+    fn create_assertion_from_certificate<'key>(
+        encoding_key: &'key EncodingKey,
+        audience: &str,
+        issuer: &str,
+    ) -> Assertion<'key> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let claims = AssertionClaims {
+            aud: audience.to_string(),
+            sub: issuer.to_string(),
+            iss: issuer.to_string(),
+            exp: 600 + now,
+            iat: now,
+            jti: Uuid::new_v4().to_string(),
+        };
+
+        let assertion = jsonwebtoken::encode(&Header::default(), &claims, encoding_key).unwrap();
+        return Assertion {
+            assertion: assertion.as_str(),
+            expiration_time: Some(now),
+        };
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AssertionClaims {
+    aud: String,
+    sub: String,
+    iss: String,
+    jti: String,
+    iat: u64,
+    exp: u64,
 }
 
 pub trait ClientApplication {
@@ -356,6 +528,15 @@ impl ClientApplication for PublicClient<'_> {
     }
 }
 
+impl ClientApplication for ConfidentialClient<'_> {
+    fn client_id(&self) -> &str {
+        return &self.client_id;
+    }
+
+    fn authority(&self) -> &Authority {
+        return &self.authority;
+    }
+}
 fn http_get(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
     reqwest::blocking::get(url)
 }
