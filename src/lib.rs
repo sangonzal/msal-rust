@@ -48,13 +48,13 @@ pub struct ConfidentialClient<'a> {
 }
 
 pub struct ClientCredential<'a> {
-    assertion: Option<Assertion<'a>>,
+    assertion: Option<Assertion>,
     secret: Option<&'a str>,
     encoding_key: Option<EncodingKey>,
 }
 
-struct Assertion<'a> {
-    assertion: &'a str,
+struct Assertion {
+    assertion: String,
     expiration_time: Option<u64>,
 }
 
@@ -75,7 +75,7 @@ impl<'a> ClientCredential<'a> {
         };
     }
 
-    pub fn from_assertion(assertion: &'a str) -> Self {
+    pub fn from_assertion(assertion: String) -> Self {
         let assertion = Assertion {
             assertion,
             expiration_time: None,
@@ -137,7 +137,7 @@ impl<'a> ConfidentialClient<'a> {
     }
 
     fn apply_client_authentication(
-        &mut self,
+        &'a mut self,
         mut parameters: HashMap<&'a str, &'a str>,
     ) -> HashMap<&'a str, &'a str> {
         if let Some(client_secret) = self.credential.secret {
@@ -146,6 +146,7 @@ impl<'a> ConfidentialClient<'a> {
             let mut assertion = self
                 .credential
                 .assertion
+                .take()
                 .expect("If there is no secret, then there must be an assertion");
             // if there is an expiration time, we created the assertion, and therefore have and encoding key for it
             if let Some(expiration_time) = assertion.expiration_time {
@@ -159,15 +160,19 @@ impl<'a> ConfidentialClient<'a> {
                         &self
                             .credential
                             .encoding_key
+                            .take()
                             .expect("if expiration date is set, then encoding key is set"),
                         &self.authority.token_endpoint,
                         &self.client_id,
                     );
-                    self.credential.assertion = Some(assertion);
                 }
             }
+            self.credential.assertion = Some(assertion);
             parameters.insert(ASSERTION_TYPE, CLIENT_ASSERTION_GRANT_TYPE);
-            parameters.insert(ASSERTION, &assertion.assertion);
+            parameters.insert(
+                ASSERTION,
+                &self.credential.assertion.as_ref().expect("").assertion,
+            );
         }
         return parameters;
     }
@@ -176,7 +181,7 @@ impl<'a> ConfidentialClient<'a> {
         encoding_key: &'key EncodingKey,
         audience: &str,
         issuer: &str,
-    ) -> Assertion<'key> {
+    ) -> Assertion {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -191,9 +196,8 @@ impl<'a> ConfidentialClient<'a> {
             jti: Uuid::new_v4().to_string(),
         };
 
-        let assertion = jsonwebtoken::encode(&Header::default(), &claims, encoding_key).unwrap();
         return Assertion {
-            assertion: assertion.as_str(),
+            assertion: jsonwebtoken::encode(&Header::default(), &claims, encoding_key).unwrap(),
             expiration_time: Some(now),
         };
     }
